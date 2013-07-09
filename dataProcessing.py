@@ -5,25 +5,47 @@ from client.gal import TroiaClient
 from nominalJobsTests.testSettings import *
 import csv
 import os
+import sys
 
 class ProcessData():
+
+    APACK_SIZE = 500
 
     def loadAssigns(self, fileName):
         print 'Loading assigns file'
         assignedLabels = []
+        assignsPack = []
+        i = 0
         for line in open(fileName,'r'):
+            i += 1
             rowData = re.split('\t', line)
             workerName = rowData[0]
             objectName = rowData[1]
             assignedLabel = rowData[2].strip('\n')
             label = (workerName, objectName, assignedLabel)
-            assignedLabels.append(label)
+            assignsPack.append(label)
+            if i == self.APACK_SIZE:
+                assignedLabels.append(assignsPack)
+                assignsPack = []
+                i = 0
+        assignedLabels.append(assignsPack)
         return assignedLabels
+
+
+    def post_assigns(self, tc, assigns):
+        initTime = datetime.now()
+        i = 0
+        for package in assigns:
+            i += 1
+            self.check_status(tc, tc.post_assigned_labels(package))
+        loadAssigns_t = datetime.now() - initTime
+        print loadAssigns_t
+        return loadAssigns_t
 
     def loadCategories(self, fileName):
         print 'Loading categories file'
-        categories=[]
-        for category in open(fileName,'r'):
+        categories = []
+        for category in open(fileName, 'r'):
             categories.append(category.rstrip(os.linesep))
         return categories
 
@@ -31,7 +53,7 @@ class ProcessData():
         print 'Loading gold labels file'
         goldLabels = []
         try:
-            for line in open(fileName,'r'):
+            for line in open(fileName, 'r'):
                 rowData = re.split('\t', line)
                 object = rowData[0]
                 category = rowData[1].strip(os.linesep)
@@ -62,6 +84,19 @@ class ProcessData():
             assert False
         return response
 
+    def time_api_call(self, fun, *args, **kwargs):
+        initTime = datetime.now()
+        fun(*args, **kwargs)
+        timeTaken = datetime.now() - initTime
+        print timeTaken
+        return timeTaken
+
+    def time_data_load_call(self, fun, *args, **kwargs):
+        initTime = datetime.now()
+        data = fun(*args, **kwargs)
+        timeTaken = datetime.now() - initTime
+        print timeTaken
+        return data
 
 if __name__ == '__main__':
     dataSetsFolder = os.path.join(os.path.abspath(os.curdir), 'datasets')
@@ -73,7 +108,7 @@ if __name__ == '__main__':
     algorithms = ['BMV', 'IMV', 'BDS', 'IDS']
     with open('dataPerf.csv', "wb") as csv_file:
         results_writer = csv.writer(csv_file, delimiter=',')
-        results_writer.writerow(['DataSet', 'Algorithm', 'ReadCategoriesFile', 'ReadAssignsFile', 'ReadGoldLabels', 'ReadEvaluationLabels', 'CreateClient', 'LoadAssigns', 'LoadGoldLabels', 'LoadEvaluationLabels', 'Compute', 'GetObjectPrediction', 'GetWorkerQualities'])
+        results_writer.writerow(['DataSet', 'Algorithm', 'CreateClient', 'LoadAssigns', 'LoadGoldLabels', 'LoadEvaluationLabels', 'Compute', 'GetObjectPrediction', 'GetWorkerQualities'])
         for dataSet in dataSets:
             testFolder = os.path.join(dataSetsFolder, dataSet)
             print testFolder
@@ -85,66 +120,31 @@ if __name__ == '__main__':
                 print '--------'
                 print algorithm
                 client = TroiaClient(ADDRESS)
-                initTime = datetime.now()
-                categories = dataProcessor.loadCategories(categoriesFile)
-                loadCategoryFile_t = datetime.now() - initTime
-                print loadCategoryFile_t 
 
-                initTime = datetime.now()
-                assigns = dataProcessor.loadAssigns(assignsFile)
-                loadAssignsFile_t = datetime.now() - initTime
-                print loadAssignsFile_t
+                categories = dataProcessor.time_data_load_call(lambda: dataProcessor.loadCategories(categoriesFile))
+                goldLabels = dataProcessor.time_data_load_call(lambda: dataProcessor.loadGoldLabels(goldLabelsFile))
+                evaluationLabels = dataProcessor.time_data_load_call(lambda: dataProcessor.loadEvaluationLabels(evaluationLabelsFile))
+                assignedLabels = dataProcessor.time_data_load_call(lambda: dataProcessor.loadAssigns(assignsFile))
 
-                initTime = datetime.now()
-                goldLabels = dataProcessor.loadGoldLabels(goldLabelsFile)
-                loadGoldsFile_t = datetime.now() - initTime
-                print loadGoldsFile_t
-
-                initTime = datetime.now()
-                evaluationLabels = dataProcessor.loadEvaluationLabels(evaluationLabelsFile)
-                loadEvalFile_t = datetime.now() - initTime
-                print loadEvalFile_t
-
-                initTime = datetime.now()
-                response = client.create(categories, algorithm=algorithm)
-                print response
-                createClient_t = datetime.now() - initTime
-                print createClient_t
-
-                print 'Post assigned labels'
-                initTime = datetime.now()
-                dataProcessor.check_status(client, client.post_assigned_labels(assigns))
-                loadAssigns_t = datetime.now() - initTime
-                print loadAssigns_t
+                print 'Creating client'
+                createClient_t = dataProcessor.time_api_call(lambda: client.create(categories, algorithm=algorithm))
 
                 print 'Post gold labels'
-                initTime = datetime.now()
-                dataProcessor.check_status(client, client.post_gold_data(goldLabels))
-                loadGolds_t = datetime.now() - initTime
-                print loadGolds_t
+                loadGolds_t = dataProcessor.time_api_call(lambda: client.post_gold_data(goldLabels))
 
                 print 'Post evaluation labels'
-                initTime = datetime.now()
-                dataProcessor.check_status(client, client.post_evaluation_objects(evaluationLabels))
-                loadEval_t = datetime.now() - initTime
-                print loadEval_t
+                loadEval_t = dataProcessor.time_api_call(lambda: client.post_evaluation_objects(evaluationLabels))
+
+                print 'Post assigned labels'
+                loadAssigns_t = dataProcessor.post_assigns(client, assignedLabels)
 
                 print 'Computing'
-                initTime = datetime.now()
-                dataProcessor.check_status(client, client.post_compute())
-                compute_t = datetime.now() - initTime
-                print compute_t
+                compute_t = dataProcessor.time_api_call(lambda: client.post_compute())
 
                 print 'Getting object prediction'
-                initTime = datetime.now()
-                dataProcessor.check_status(client, client.get_objects_prediction("MinCost"))
-                oPred_t = datetime.now() - initTime
-                print oPred_t
+                oPred_t = dataProcessor.time_api_call(lambda: client.get_objects_prediction("MinCost"))
 
                 print 'Getting worker quality summary'
-                initTime = datetime.now()
-                dataProcessor.check_status(client, client.get_workers_quality_estimated_summary())
-                wqEst_t = datetime.now() - initTime
-                print wqEst_t
+                wqEst_t =  dataProcessor.time_api_call(lambda: client.get_workers_quality_estimated_summary())
 
-                results_writer.writerow([dataSet, algorithm, loadCategoryFile_t, loadAssignsFile_t, loadGoldsFile_t, loadEvalFile_t, createClient_t, loadAssigns_t, loadGolds_t, loadEval_t, compute_t, oPred_t, wqEst_t])
+                results_writer.writerow([dataSet, algorithm, createClient_t, loadAssigns_t, loadGolds_t, loadEval_t, compute_t, oPred_t, wqEst_t])
